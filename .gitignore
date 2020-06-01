@@ -1,4 +1,6 @@
 pkg/
 api.key
 *-handin.tar.gz
-src/main
+src/main/*
+!src/mr/
+.vscode/
