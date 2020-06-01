@@ -22,6 +22,8 @@ type KeyValue struct {
 	Value string
 }
 
+var workerID string
+
 // for sorting by key.
 type ByKey []KeyValue
 
@@ -47,6 +49,17 @@ type Task struct {
 	files    []string
 }
 
+func GetRandomString(l int) string {
+	str := "0123456789abcdefghijklmnopqrstuvwxyz"
+	bytes := []byte(str)
+	result := []byte{}
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for i := 0; i < l; i++ {
+		result = append(result, bytes[r.Intn(len(bytes))])
+	}
+	return string(result)
+}
+
 //
 // main/mrworker.go calls this function.
 //
@@ -54,24 +67,27 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
+	workerID = GetRandomString(6)
 	for {
 		// 1. request tasks
+		// fmt.Printf("--> Starting request a task: worker=%s\n", workerID)
+
 		args := TaskArgs{}
+		args.WorkerID = workerID
 		reply := TaskReply{}
-		conn := call("Master.Task", &args, &reply)
-		fmt.Println("-->Request Task")
-		if !conn {
+		
+		if conn := call("Master.Task", &args, &reply); !conn {
 			return
 		}
 
-		// 2. based on task type 0-map 1-reduce
+		// 2. based on task type 0-map 1-reduce 2-waiting for last task finish or fail
 		switch reply.TaskType {
 		case 0:
-			sleep(11, 0, reply.TaskNo, reply.Files)
 			doMapTask(reply.TaskNo, reply.Files, reply.NReduce, mapf)
 		case 1:
-			sleep(11, 0, reply.TaskNo, reply.Files)
 			doReduceTask(reply.TaskNo, reply.Files, reducef)
+		case 2:
+			time.Sleep(time.Second * 1)
 		default:
 			return
 		}
@@ -81,26 +97,19 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-func sleep(second int, pencentage float32, taskNo int, files []string) {
-	rand.Seed(time.Now().UnixNano())
-	if i := rand.Intn(100); i < int(pencentage*100) {
-		fmt.Printf("Crash! rand(%d<%d): TaskNo=%d, file=%v\n", i, int(pencentage*100), taskNo, files)
-		os.Exit(1)
-		// fmt.Printf("Sleep 11s rand(%d<%d): TaskNo=%d, file=%v\n", i, int(pencentage*100), taskNo, files)
-		// time.Sleep(time.Second * time.Duration(second))
-	}
-}
-
 //Map Task Process
 func doMapTask(mapTaskNo int, files []string, nReduce int, mapf func(string, string) []KeyValue) {
 	filenames := files
-	if len(filenames) != 1 {
+	if len(filenames) == 0 {
+		return
+	}
+	if len(filenames) > 1 {
 		fmt.Printf("invalid filenames: %d, %v\n", len(filenames), filenames)
 		return
 	}
 	filename := filenames[0]
 	if filename != "" {
-		fmt.Printf("-->Worker @MapTask: File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
+		// fmt.Printf("--> Starting MapTask: File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
 		intermediate := []KeyValue{}
 
 		file, err := os.Open(filename)
@@ -118,9 +127,11 @@ func doMapTask(mapTaskNo int, files []string, nReduce int, mapf func(string, str
 		intermediateByReduceNo := make(map[int][]KeyValue)
 		for _, item := range intermediate {
 			reduceNo := ihash(item.Key) % nReduce
+			// fmt.Printf("ReduceNo=%d\n", reduceNo)
 			intermediateByReduceNo[reduceNo] = append(intermediateByReduceNo[reduceNo], item)
 		}
 
+		intermediateFileNames := make([]string, 0)
 		for index, intermediate := range intermediateByReduceNo {
 			tempFile, err := ioutil.TempFile(".", "tmp")
 			if err != nil {
@@ -136,29 +147,32 @@ func doMapTask(mapTaskNo int, files []string, nReduce int, mapf func(string, str
 			intermediateFileName := fmt.Sprintf("mr-%s-%s", strconv.Itoa(mapTaskNo), strconv.Itoa(index))
 			os.Rename(tempFile.Name(), intermediateFileName)
 			tempFile.Close()
-			fmt.Printf("Finished intermediateFile: %s, No. %d\n", intermediateFileName, mapTaskNo)
+			intermediateFileNames = append(intermediateFileNames, intermediateFileName)
+			// fmt.Printf("Finished intermediateFile: %s, No. %d\n", intermediateFileName, mapTaskNo)
 		}
-		noticeMapFinish(mapTaskNo, filename)
+		noticeMapFinish(mapTaskNo, filename, intermediateFileNames)
+		workerID = workerID + "-" + strconv.Itoa(mapTaskNo)
 	}
 
 }
 
-func noticeMapFinish(mapTaskNo int, filename string) {
+func noticeMapFinish(mapTaskNo int, filename string, filenames []string) {
 	args := MapFinishArgs{}
 	args.TaskNo = mapTaskNo
 	args.Filename = filename
+	args.IntermediateFileNames = filenames
 	reply := MapFinishReply{}
 	call("Master.MapFinish", &args, &reply)
 	if reply.Noticed {
-		fmt.Printf("-->MapTask Successful: File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
+		// fmt.Printf("--> Successful MapTask : File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
 		return
 	}
-	fmt.Printf("-->ERROR: No Feedback: File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
+	// fmt.Printf("-->ERROR: No Feedback: File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
 }
 
 //Reduce Task Process
 func doReduceTask(reduceTaskNo int, filenames []string, reducef func(string, []string) string) {
-	fmt.Printf("--> Reducing Files: Worker-%d, files: %v\n", reduceTaskNo, filenames)
+	// fmt.Printf("--> Starting ReduceTask: Worker-%d, files: %v\n", reduceTaskNo, filenames)
 	intermediate := []KeyValue{}
 	for _, filename := range filenames {
 		file, err := os.Open(filename)
@@ -177,8 +191,11 @@ func doReduceTask(reduceTaskNo int, filenames []string, reducef func(string, []s
 	}
 
 	sort.Sort(ByKey(intermediate))
-	oname := "mr-out-" + strconv.Itoa(reduceTaskNo)
-	ofile, _ := os.Create(oname)
+
+	tempFile, err := ioutil.TempFile(".", "tmp")
+	if err != nil {
+		fmt.Println("create temp file failed.")
+	}
 
 	i := 0
 	for i < len(intermediate) {
@@ -193,13 +210,16 @@ func doReduceTask(reduceTaskNo int, filenames []string, reducef func(string, []s
 		output := reducef(intermediate[i].Key, values)
 
 		// this is the correct format for each line of Reduce output.
-		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+		fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output)
 
 		i = j
 	}
-	ofile.Close()
+	oname := "mr-out-" + strconv.Itoa(reduceTaskNo)
+	os.Rename(tempFile.Name(), oname)
+	tempFile.Close()
 	// fmt.Printf("-->ReduceTask Finish: reduceTaskNo=%d, output=%s\n", reduceTaskNo, oname)
 	noticeReduceFinish(reduceTaskNo)
+	workerID = workerID + "-" + strconv.Itoa(reduceTaskNo)
 }
 
 func noticeReduceFinish(reduceTaskNo int) {
@@ -208,7 +228,7 @@ func noticeReduceFinish(reduceTaskNo int) {
 	reply := ReduceFinishReply{}
 	call("Master.ReduceFinish", &args, &reply)
 	if reply.Noticed {
-		fmt.Printf("-->ReduceTask Successful: ReduceTaskNo=%d\n", reduceTaskNo)
+		// fmt.Printf("--> Successful ReduceTask : ReduceTaskNo=%d\n", reduceTaskNo)
 		return
 	}
 	fmt.Printf("-->ERROR: No Feedback: ReduceTaskNo=%d\n", reduceTaskNo)

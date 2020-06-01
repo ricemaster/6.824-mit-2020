@@ -1,7 +1,7 @@
 package mr
 
 import (
-	"fmt"
+	// "fmt"
 	"log"
 	"net"
 	"net/http"
@@ -21,10 +21,11 @@ type Master struct {
 	done                   chan bool
 	nextMapTaskNo          int
 	totalInputFiles        int
-	taskPhase              int // 0:map phase;  1:reduce phase
+	taskPhase              int // 0:map phase;  1:reduce phase;
 	inputFiles             chan string
 	mapTasks               map[int]string // [WhickWorkerDidThisMapTask:Filename]
 	mapFinish              map[string]int //[Filename:SuccessMapTaskNo]
+	mapIntermediateFiles   [][]string
 	nReduce                int
 	nextReduceTaskNo       int
 	failedMapTaskNo        map[int]int
@@ -36,16 +37,23 @@ type Master struct {
 
 // Your code here -- RPC handlers for the worker to call.
 func (m *Master) Task(args *TaskArgs, reply *TaskReply) error {
+	// fmt.Printf("-->Receiving Task Requesting: worker=%s\n", args.WorkerID)
 	m.mux.Lock()
 	taskType := m.taskPhase
 	m.mux.Unlock()
 	switch taskType {
 	case 0:
+		// wg.Add(1)
 		reply.TaskType = taskType
 
 		taskNo := m.nextMapTaskNo
 		reply.TaskNo = taskNo
 
+		if len(m.inputFiles) == 0 {
+			reply.TaskType = 2
+			reply.Files = []string{}
+			return nil
+		}
 		filename := <-m.inputFiles
 		reply.Files = []string{filename}
 
@@ -58,27 +66,40 @@ func (m *Master) Task(args *TaskArgs, reply *TaskReply) error {
 
 		m.nextMapTaskNo++
 
+		// fmt.Printf("--> assigned MapTask: worker=%s\n", args.WorkerID)
+
 		return nil
 	case 1:
+		// wg.Add(1)
 		reply.TaskType = taskType
-		taskNo := m.nextReduceTaskNo
-		reply.TaskNo = taskNo
-
 		m.mux.Lock()
-		fmt.Printf("-->Channel[inputIntermediateFiles] Size: %d\n", len(m.inputIntermediateFiles))
-		filenames := <-m.inputIntermediateFiles
-		m.nReduce--
+		taskNo := m.nextReduceTaskNo
 		m.mux.Unlock()
+		reply.TaskNo = taskNo
+		if len(m.inputIntermediateFiles) == 0 {
+			reply.TaskType = 2
+			reply.Files = []string{}
+			return nil
+		}
+		// fmt.Printf("-->Channel[inputIntermediateFiles] Size: %d\n", len(m.inputIntermediateFiles))
+		filenames := <-m.inputIntermediateFiles
+
 		reply.Files = filenames
 
+		
+		m.mux.Lock()
+		// m.nReduce--
+		m.nextReduceTaskNo++
+		m.mux.Unlock()
+		
 		wg.Add(1)
 		go checkReduceTask(m, taskNo, filenames)
-
-		m.nextReduceTaskNo++
+		// fmt.Printf("--> assigned ReduceTask: worker=%s\n", args.WorkerID)
 
 		return nil
 
 	default:
+		reply.TaskType = -1  //notice worker to exit
 		return nil
 
 	}
@@ -86,42 +107,58 @@ func (m *Master) Task(args *TaskArgs, reply *TaskReply) error {
 }
 
 func (m *Master) MapFinish(args *MapFinishArgs, reply *MapFinishReply) error {
+	// defer wg.Done()
 	reply.Noticed = true
 	taskNo := args.TaskNo
+	intermediateFiles := args.IntermediateFileNames
+	// fmt.Printf("amount=%d, files=%v\n", len(intermediateFiles), intermediateFiles)
 	filename := args.Filename
 	m.mux.Lock()
 	_, failed := m.failedMapTaskNo[taskNo]
-	m.mux.Unlock()
+	m.mapIntermediateFiles = append(m.mapIntermediateFiles, intermediateFiles)
+
 	if failed {
 		return nil
 	}
-	m.mux.Lock()
+
 	m.mapFinish[filename] = taskNo
-	fmt.Printf("-->MapTask Successful[%d/%d]: %s by Worker-%d\n", len(m.mapFinish), m.totalInputFiles, args.Filename, args.TaskNo)
+	// fmt.Printf("--> Successful MapTask [%d/%d]: %s by Worker-%d\n", len(m.mapFinish), m.totalInputFiles, args.Filename, args.TaskNo)
 
 	if len(m.mapFinish) == m.totalInputFiles {
 		// fmt.Printf("%v\n", m.mapFinish)
-		m.taskPhase = 1
-		for i := 0; i < m.nReduce; i++ {
-			for _, successfulMapTaskNo := range m.mapFinish {
-				filename := fmt.Sprintf("mr-%s-%s", strconv.Itoa(successfulMapTaskNo), strconv.Itoa(i))
-				m.reduceTasks[i] = append(m.reduceTasks[i], filename)
+		tempList := make(map[string][]string, 0)
+		for _, intintermediateFile := range m.mapIntermediateFiles {
+			for _, file := range intintermediateFile {
+				reduceTaskNo := file[len(file)-1:]
+				tempList[reduceTaskNo] = append(tempList[reduceTaskNo], file)
 			}
-			m.inputIntermediateFiles <- m.reduceTasks[i]
 		}
+		for _, reduceFileList := range tempList {
+			m.inputIntermediateFiles <- reduceFileList
+		}
+		// fmt.Printf("Channel Size: %d\n", len(m.inputIntermediateFiles))
+		// for i := 0; i < m.nReduce; i++ {
+		// 	for _, successfulMapTaskNo := range m.mapFinish {
+		// 		filename := fmt.Sprintf("mr-%s-%s", strconv.Itoa(successfulMapTaskNo), strconv.Itoa(i))
+		// 		m.reduceTasks[i] = append(m.reduceTasks[i], filename)
+		// 	}
+		// 	m.inputIntermediateFiles <- m.reduceTasks[i]
+		// }
+		m.taskPhase = 1
+		m.nReduce = len(m.inputIntermediateFiles)
+		// fmt.Printf("Total Reduce Tasks: %d\n", m.nReduce)
 	}
+
 	m.mux.Unlock()
 	return nil
 }
 
 func (m *Master) ReduceFinish(args *ReduceFinishArgs, reply *ReduceFinishReply) error {
+	// defer wg.Done()
 	m.mux.Lock()
-	reply.Noticed = true
 	m.reduceFinish[args.TaskNo] = true
-	fmt.Printf("-->ReduceTask Successful[%d left]: Worker-%d\n", m.nReduce, args.TaskNo)
-	if m.nReduce == 0 {
-		m.done <- true
-	}
+	reply.Noticed = true
+	// fmt.Printf("--> Successful ReduceTask [%d left]: Worker-%d\n", m.nReduce, args.TaskNo)
 	m.mux.Unlock()
 	return nil
 }
@@ -133,21 +170,29 @@ func checkMapTask(m *Master, taskNo int, filename string) {
 	if _, done := m.mapFinish[filename]; !done {
 		m.inputFiles <- filename
 		m.failedMapTaskNo[taskNo] = 1
-		fmt.Printf("--> MapTask Failed: Worker-%d, files: %v\n", taskNo, filename)
+		// wg.Done()
+		// fmt.Printf("--> Failed MapTask : Worker-%d, files: %v\n", taskNo, filename)
 	}
 	m.mux.Unlock()
 }
 
 func checkReduceTask(m *Master, taskNo int, filenames []string) {
 	defer wg.Done()
+	// fmt.Printf("--> Starting Check ReduceTask: worker-%d\n", taskNo)
 	time.Sleep(time.Second * 10)
 	m.mux.Lock()
+	m.nReduce--
 	if _, done := m.reduceFinish[taskNo]; !done {
 		m.inputIntermediateFiles <- filenames
-		fmt.Printf("-->Channel[inputIntermediateFiles] Size: %d\n", len(m.inputIntermediateFiles))
+		// fmt.Printf("-->Channel[inputIntermediateFiles] Size: %d\n", len(m.inputIntermediateFiles))
 		m.failedReduceFinish = append(m.failedReduceFinish, taskNo)
 		m.nReduce++
-		fmt.Printf("--> ReduceTask Failed: Worker-%d, files: %v\n", taskNo, filenames)
+		// wg.Done()
+		// fmt.Printf("--> Failed ReduceTask : Worker-%d, files: %v\n", taskNo, filenames)
+	}
+	if m.nReduce == 0 {
+		m.taskPhase = -1
+		m.done <- true
 	}
 	m.mux.Unlock()
 }
@@ -186,20 +231,22 @@ func (m *Master) Done() bool {
 	ret := false
 
 	// Your code here.
-	wg.Wait()
+	// wg.Wait()
 
 	ret = <-m.done
 
+	m.mux.Lock()
 	if len(m.failedReduceFinish) != 0 {
-		fmt.Printf("%v\n", m.failedReduceFinish)
+		// fmt.Printf("Crashed Workers: %v\n", m.failedReduceFinish)
 		for _, taskNo := range m.failedReduceFinish {
 			filename := "mr-out-" + strconv.Itoa(taskNo)
 			err := os.Remove(filename)
 			if err != nil {
-				fmt.Println("Delete file failed: ", filename)
+				// fmt.Println("Delete file failed: ", filename)
 			}
 		}
 	}
+	m.mux.Unlock()
 
 	return ret
 }
@@ -220,9 +267,10 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.mapFinish = make(map[string]int)
 	m.failedMapTaskNo = make(map[int]int)
 	m.reduceTasks = make(map[int][]string)
-	m.inputIntermediateFiles = make(chan []string, nReduce)
+	m.inputIntermediateFiles = make(chan []string, 100)
 	m.done = make(chan bool)
 	m.reduceFinish = make(map[int]bool)
+	m.mapIntermediateFiles = make([][]string, 0)
 	m.taskPhase = 0
 	m.nReduce = nReduce
 

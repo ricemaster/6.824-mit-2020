@@ -27,6 +27,7 @@ type ExampleReply struct {
 // Add your RPC definitions here.
 
 type TaskArgs struct {
+	WorkerID string
 }
 
 type TaskReply struct {
@@ -39,6 +40,7 @@ type TaskReply struct {
 type MapFinishArgs struct {
 	TaskNo   int
 	Filename string
+	IntermediateFileNames []string
 }
 
 type MapFinishReply struct {
