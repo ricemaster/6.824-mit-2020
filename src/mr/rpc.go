@@ -38,8 +38,8 @@ type TaskReply struct {
 }
 
 type MapFinishArgs struct {
-	TaskNo   int
-	Filename string
+	TaskNo                int
+	Filename              string
 	IntermediateFileNames []string
 }
 

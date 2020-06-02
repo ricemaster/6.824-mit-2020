@@ -70,12 +70,12 @@ func Worker(mapf func(string, string) []KeyValue,
 	workerID = GetRandomString(6)
 	for {
 		// 1. request tasks
-		// fmt.Printf("--> Starting request a task: worker=%s\n", workerID)
+		// log.Printf("Starting request a task: worker=%s\n", workerID)
 
 		args := TaskArgs{}
 		args.WorkerID = workerID
 		reply := TaskReply{}
-		
+
 		if conn := call("Master.Task", &args, &reply); !conn {
 			return
 		}
@@ -104,12 +104,12 @@ func doMapTask(mapTaskNo int, files []string, nReduce int, mapf func(string, str
 		return
 	}
 	if len(filenames) > 1 {
-		fmt.Printf("invalid filenames: %d, %v\n", len(filenames), filenames)
+		log.Printf("invalid filenames: %d, %v\n", len(filenames), filenames)
 		return
 	}
 	filename := filenames[0]
 	if filename != "" {
-		// fmt.Printf("--> Starting MapTask: File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
+		// log.Printf("Starting MapTask: File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
 		intermediate := []KeyValue{}
 
 		file, err := os.Open(filename)
@@ -127,7 +127,7 @@ func doMapTask(mapTaskNo int, files []string, nReduce int, mapf func(string, str
 		intermediateByReduceNo := make(map[int][]KeyValue)
 		for _, item := range intermediate {
 			reduceNo := ihash(item.Key) % nReduce
-			// fmt.Printf("ReduceNo=%d\n", reduceNo)
+			// log.Printf("ReduceNo=%d\n", reduceNo)
 			intermediateByReduceNo[reduceNo] = append(intermediateByReduceNo[reduceNo], item)
 		}
 
@@ -135,20 +135,20 @@ func doMapTask(mapTaskNo int, files []string, nReduce int, mapf func(string, str
 		for index, intermediate := range intermediateByReduceNo {
 			tempFile, err := ioutil.TempFile(".", "tmp")
 			if err != nil {
-				fmt.Println("create temp file failed.")
+				log.Println("create temp file failed.")
 			}
 			enc := json.NewEncoder(tempFile)
 			for _, kv := range intermediate {
 				err := enc.Encode(&kv)
 				if err != nil {
-					fmt.Printf("encode error: %v\n", &kv)
+					log.Printf("encode error: %v\n", &kv)
 				}
 			}
 			intermediateFileName := fmt.Sprintf("mr-%s-%s", strconv.Itoa(mapTaskNo), strconv.Itoa(index))
 			os.Rename(tempFile.Name(), intermediateFileName)
 			tempFile.Close()
 			intermediateFileNames = append(intermediateFileNames, intermediateFileName)
-			// fmt.Printf("Finished intermediateFile: %s, No. %d\n", intermediateFileName, mapTaskNo)
+			// log.Printf("Finished intermediateFile: %s, No. %d\n", intermediateFileName, mapTaskNo)
 		}
 		noticeMapFinish(mapTaskNo, filename, intermediateFileNames)
 		workerID = workerID + "-" + strconv.Itoa(mapTaskNo)
@@ -164,20 +164,20 @@ func noticeMapFinish(mapTaskNo int, filename string, filenames []string) {
 	reply := MapFinishReply{}
 	call("Master.MapFinish", &args, &reply)
 	if reply.Noticed {
-		// fmt.Printf("--> Successful MapTask : File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
+		// log.Printf("Successful MapTask : File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
 		return
 	}
-	// fmt.Printf("-->ERROR: No Feedback: File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
+	// log.Printf("ERROR: No Feedback: File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
 }
 
 //Reduce Task Process
 func doReduceTask(reduceTaskNo int, filenames []string, reducef func(string, []string) string) {
-	// fmt.Printf("--> Starting ReduceTask: Worker-%d, files: %v\n", reduceTaskNo, filenames)
+	// log.Printf("Starting ReduceTask: Worker-%d, files: %v\n", reduceTaskNo, filenames)
 	intermediate := []KeyValue{}
 	for _, filename := range filenames {
 		file, err := os.Open(filename)
 		if err != nil {
-			fmt.Printf("Open file failed: %s\n", filename)
+			log.Printf("Open file failed: %s\n", filename)
 		}
 		dec := json.NewDecoder(file)
 		for {
@@ -194,7 +194,7 @@ func doReduceTask(reduceTaskNo int, filenames []string, reducef func(string, []s
 
 	tempFile, err := ioutil.TempFile(".", "tmp")
 	if err != nil {
-		fmt.Println("create temp file failed.")
+		log.Println("create temp file failed.")
 	}
 
 	i := 0
@@ -217,7 +217,7 @@ func doReduceTask(reduceTaskNo int, filenames []string, reducef func(string, []s
 	oname := "mr-out-" + strconv.Itoa(reduceTaskNo)
 	os.Rename(tempFile.Name(), oname)
 	tempFile.Close()
-	// fmt.Printf("-->ReduceTask Finish: reduceTaskNo=%d, output=%s\n", reduceTaskNo, oname)
+	// log.Printf("ReduceTask Finish: reduceTaskNo=%d, output=%s\n", reduceTaskNo, oname)
 	noticeReduceFinish(reduceTaskNo)
 	workerID = workerID + "-" + strconv.Itoa(reduceTaskNo)
 }
@@ -228,10 +228,10 @@ func noticeReduceFinish(reduceTaskNo int) {
 	reply := ReduceFinishReply{}
 	call("Master.ReduceFinish", &args, &reply)
 	if reply.Noticed {
-		// fmt.Printf("--> Successful ReduceTask : ReduceTaskNo=%d\n", reduceTaskNo)
+		// log.Printf("Successful ReduceTask : ReduceTaskNo=%d\n", reduceTaskNo)
 		return
 	}
-	fmt.Printf("-->ERROR: No Feedback: ReduceTaskNo=%d\n", reduceTaskNo)
+	log.Printf("ERROR: No Feedback: ReduceTaskNo=%d\n", reduceTaskNo)
 }
 
 //
@@ -254,7 +254,7 @@ func CallExample() {
 	call("Master.Example", &args, &reply)
 
 	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+	log.Printf("reply.Y %v\n", reply.Y)
 }
 
 //
@@ -276,6 +276,6 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		return true
 	}
 
-	// fmt.Println(err)
+	// log.Println(err)
 	return false
 }
