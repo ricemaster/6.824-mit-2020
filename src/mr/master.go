@@ -11,7 +11,8 @@ import (
 	"time"
 )
 
-var wg sync.WaitGroup
+// var wg sync.WaitGroup
+var checkTask = 10 //wait up to 10s to re-assign task to another worker
 
 type Master struct {
 	// Your definitions here.
@@ -37,6 +38,10 @@ type Master struct {
 // Your code here -- RPC handlers for the worker to call.
 func (m *Master) Task(args *TaskArgs, reply *TaskReply) error {
 	// log.Printf("Receiving Task Requesting: worker=%s\n", args.WorkerID)
+	// assign task base on  phase
+	// 0-Map Phase
+	// 1-Reduce Phase
+	// -1 exit
 	m.mux.Lock()
 	taskType := m.taskPhase
 	m.mux.Unlock()
@@ -63,9 +68,8 @@ func (m *Master) Task(args *TaskArgs, reply *TaskReply) error {
 
 		// log.Printf("assigned MapTask: File=%s, MapTaskNo=%d\n", filename, taskNo)
 
-		wg.Add(1)
+		// wg.Add(1)
 		go checkMapTask(m, taskNo, filename)
-
 
 		// log.Printf("assigned MapTask: worker=%s\n", args.WorkerID)
 
@@ -92,7 +96,7 @@ func (m *Master) Task(args *TaskArgs, reply *TaskReply) error {
 		m.nextReduceTaskNo++
 		m.mux.Unlock()
 
-		wg.Add(1)
+		// wg.Add(1)
 		go checkReduceTask(m, taskNo, filenames)
 		// log.Printf("assigned ReduceTask: worker=%s\n", args.WorkerID)
 
@@ -164,8 +168,15 @@ func (m *Master) ReduceFinish(args *ReduceFinishArgs, reply *ReduceFinishReply) 
 }
 
 func checkMapTask(m *Master, taskNo int, filename string) {
-	defer wg.Done()
-	time.Sleep(time.Second * 10)
+	// defer wg.Done()
+	for i := 0; i < checkTask*10; i++ {
+		m.mux.Lock()
+		_, done := m.mapFinish[filename]
+		m.mux.Unlock()
+		if !done {
+			time.Sleep(time.Second / 10)
+		}
+	}
 	m.mux.Lock()
 	if _, done := m.mapFinish[filename]; !done {
 		m.inputFiles <- filename
@@ -177,9 +188,17 @@ func checkMapTask(m *Master, taskNo int, filename string) {
 }
 
 func checkReduceTask(m *Master, taskNo int, filenames []string) {
-	defer wg.Done()
+	// defer wg.Done()
 	// log.Printf("Starting Check ReduceTask: worker-%d\n", taskNo)
-	time.Sleep(time.Second * 10)
+	for i := 0; i < checkTask*10; i++ {
+		m.mux.Lock()
+		_, done := m.reduceFinish[taskNo]
+		m.mux.Unlock()
+		if !done {
+			time.Sleep(time.Second / 10)
+		}
+	}
+
 	m.mux.Lock()
 	m.nReduce--
 	if _, done := m.reduceFinish[taskNo]; !done {

@@ -49,6 +49,7 @@ type Task struct {
 	files    []string
 }
 
+// GetRandomString : give a unique id to worker for test only
 func GetRandomString(l int) string {
 	str := "0123456789abcdefghijklmnopqrstuvwxyz"
 	bytes := []byte(str)
@@ -80,7 +81,10 @@ func Worker(mapf func(string, string) []KeyValue,
 			return
 		}
 
-		// 2. based on task type 0-map 1-reduce 2-waiting for last task finish or fail
+		// 2. do Map/Reduce task based on task type
+		// 0-map
+		// 1-reduce
+		// 2-waiting for last task finish or fail
 		switch reply.TaskType {
 		case 0:
 			doMapTask(reply.TaskNo, reply.Files, reply.NReduce, mapf)
@@ -112,6 +116,7 @@ func doMapTask(mapTaskNo int, files []string, nReduce int, mapf func(string, str
 		// log.Printf("Starting MapTask: File=%s, MapTaskNo=%d\n", filename, mapTaskNo)
 		intermediate := []KeyValue{}
 
+		// call mapF
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
@@ -131,6 +136,7 @@ func doMapTask(mapTaskNo int, files []string, nReduce int, mapf func(string, str
 			intermediateByReduceNo[reduceNo] = append(intermediateByReduceNo[reduceNo], item)
 		}
 
+		// save intermediate k/v
 		intermediateFileNames := make([]string, 0)
 		for index, intermediate := range intermediateByReduceNo {
 			tempFile, err := ioutil.TempFile(".", "tmp")
@@ -173,6 +179,8 @@ func noticeMapFinish(mapTaskNo int, filename string, filenames []string) {
 //Reduce Task Process
 func doReduceTask(reduceTaskNo int, filenames []string, reducef func(string, []string) string) {
 	// log.Printf("Starting ReduceTask: Worker-%d, files: %v\n", reduceTaskNo, filenames)
+
+	// get intermediate k/v
 	intermediate := []KeyValue{}
 	for _, filename := range filenames {
 		file, err := os.Open(filename)
@@ -197,6 +205,7 @@ func doReduceTask(reduceTaskNo int, filenames []string, reducef func(string, []s
 		log.Println("create temp file failed.")
 	}
 
+	// call reduceF
 	i := 0
 	for i < len(intermediate) {
 		j := i + 1
@@ -267,7 +276,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	sockname := masterSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
-		log.Fatal("dialing:", err)
+		// log.Fatal("dialing:", err)
 	}
 	defer c.Close()
 
