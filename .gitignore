@@ -4,3 +4,4 @@ api.key
 src/main/*
 !src/mr/
 .vscode/
+src/main/test-mr.sh
