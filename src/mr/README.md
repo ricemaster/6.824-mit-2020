@@ -21,8 +21,8 @@
 - Master
   - init: list all input file names; phase=map
   - start server
-  - assign map/reduce task if not get "finish" response from worker in 10 seconds
-  - re-assign task if not 
+  - assign map/reduce task
+  - re-assign task if not get "task finish" response from worker in 10 seconds
   - check all task completion using channel
 - Worker
   - request task
