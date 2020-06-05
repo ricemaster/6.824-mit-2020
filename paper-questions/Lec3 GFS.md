@@ -15,7 +15,7 @@
 ## Answer
 
 1. `Client-1 (C1)` requests to ***read*** `X`  -----> `Master (M)`
-2. `C1` got a list of chunkservers and picks the nearest chunkserver who is `Secondary-1(S1)` of this replication group
+2. `C1` got a list of chunkservers and picks the closest chunkserver who is `Secondary-1(S1)` of this replication group
 3. `C1` cached `S1` locally and ***reads*** `X`
 4. `Client-2 (C2)` requests to ***write*** `X` -----> `M`
 5. The network between `S1` and `M` become **disconnected**
