@@ -18,5 +18,4 @@ No, the `split brain` disaster will not happen.
 
 The mechanism to prevent `split brain` is called `TEST-AND-SET`.
 
-VMWare uses a outside authority, a third-party server, to communicate with both primary and backup.  This external tiebreaker tests primary and backup to find out if they're alive, and sets a flag locally to make sure there will be only one primary go live.
-
+The system uses shared disk as storage for both primary and backup. There's a `TEST-AND-SET` service running on this shared disk server. As an outside authority, this external tiebreaker responses the test from primary and backup, and sets a flag locally to make sure there will be only one replica go live to be the primary. If the primary and backup lose network contact with each other, they will both talk to `TEST-AND-SET` service trying to be the primary of the system, and usually the service allows the server who called first.
