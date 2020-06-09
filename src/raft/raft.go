@@ -426,6 +426,7 @@ func (rf *Raft) startElection() {
 		if server != rf.me {
 			// wg.Add(1)
 			go func(server int, rf *Raft) {
+				rf.mu.Lock()
 				reply := RequestVoteReply{}
 				ok := rf.sendRequestVote(server, &args, &reply)
 				DPrintf("call[Raft.RequestVote]: server=%d, return %v, voted=%v", server, ok, reply.VoteGranted)
@@ -443,6 +444,7 @@ func (rf *Raft) startElection() {
 				} else {
 					DPrintf("Failed call[Raft.RequestVote]\n")
 				}
+				rf.mu.Unlock()
 				// wg.Done()
 			}(server, rf)
 		}
