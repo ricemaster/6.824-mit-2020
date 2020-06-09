@@ -33,8 +33,6 @@ var Leader = 0
 var Follower = 1
 var Candidate = 2
 
-var receivedHeartBeat = false
-
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -81,14 +79,15 @@ type Raft struct {
 	matchIndex map[int]int
 
 	// timeout
-	electionTimeout int
+	electionTimeout  int
+	receiveHeartBeat bool
 }
 
 //LogEntry - Log
 type LogEntry struct {
-	index   int
-	term    int
-	command string
+	Index   int
+	Term    int
+	Command string
 }
 
 // return currentTerm and whether this server
@@ -98,8 +97,12 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	// rf.mu.Lock()
+	// defer rf.mu.Unlock()
 	term = rf.currentTerm
 	isleader = (rf.state == Leader)
+
+	DPrintf("GetStatus: id=%d, term=%d, isleader=%v", rf.me, term, isleader)
 
 	return term, isleader
 }
@@ -169,19 +172,21 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	// rf.mu.Lock()
+	// defer rf.mu.Unlock()
 
+	DPrintf("Received Vote Request: id=%d, %v\n", rf.me, args)
+	rf.receiveHeartBeat = true
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return
 	}
 
-	// in Go nil mean 0 for int
-	// how to distinguish voteFor candidate 0 or nil?
-	if (rf.voteFor == 0 || rf.voteFor == args.CandidateID) &&
-		rf.log[args.LastLogIndex].term == args.LastLogTerm {
+	if (rf.voteFor == -1 || rf.voteFor == args.CandidateID) &&
+		rf.log[args.LastLogIndex].Term == args.LastLogTerm {
+		rf.voteFor = args.CandidateID
+		rf.currentTerm = args.Term
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
 		return
@@ -244,28 +249,27 @@ type AppendEntriesReply struct {
 // AppendEntries - handle AppendEntries RPC
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// Your code here (2A, 2B).
-	receivedHeartBeat = true
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	currentTerm := rf.currentTerm
-	if args.Term < currentTerm {
-		reply.Term = currentTerm
+	rf.receiveHeartBeat = true
+
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
 	}
 
 	log := rf.log[args.PrevLogIndex]
-	if log.term != args.PrevLogTerm {
-		reply.Term = currentTerm
+	if log.Term != args.PrevLogTerm {
+		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
 	}
 
 	for index, logEntry := range args.Enties {
 		entry, exist := rf.log[index]
-		if !exist || entry.term != logEntry.term {
+		if !exist || entry.Term != logEntry.Term {
 			rf.log[index] = logEntry
 		}
 		rf.lastLogIndex = index
@@ -275,7 +279,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.lastLogIndex)
 	}
 
-	reply.Term = currentTerm
+	rf.currentTerm = args.Term
 	reply.Success = true
 }
 
@@ -343,20 +347,25 @@ func generateTimeout() int {
 }
 
 func (rf *Raft) handleHeartBeat() {
-	for{
+	for {
 		rf.mu.Lock()
 		currentState := rf.state
 		rf.mu.Unlock()
 		DPrintf("Current Stat: %d\n", currentState)
 		switch currentState {
 		case Follower:
-			receivedHeartBeat = false
-			
-			for i:=0;i<rf.electionTimeout;i++{
+			rf.mu.Lock()
+			rf.receiveHeartBeat = false
+			rf.mu.Unlock()
+
+			for i := 0; i < rf.electionTimeout; i++ {
 				time.Sleep(time.Millisecond)
-				if receivedHeartBeat {
+				rf.mu.Lock()
+				if rf.receiveHeartBeat {
+					DPrintf("Receiving HeartBeat: id=%d\n", rf.me)
 					break
 				}
+				rf.mu.Unlock()
 			}
 			rf.startElection()
 
@@ -364,7 +373,7 @@ func (rf *Raft) handleHeartBeat() {
 
 		case Leader:
 			rf.sendHeartBeat()
-			time.Sleep(time.Millisecond*time.Duration(rf.electionTimeout))
+			time.Sleep(time.Millisecond * time.Duration(rf.electionTimeout))
 
 		default:
 
@@ -376,7 +385,7 @@ func (rf *Raft) handleHeartBeat() {
 func (rf *Raft) startElection() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("Start Election: id=%d\n", rf.me)
+	DPrintf("Starting Election: id=%d\n", rf.me)
 
 	rf.currentTerm++
 	rf.state = Candidate
@@ -387,27 +396,33 @@ func (rf *Raft) startElection() {
 	args.CandidateID = rf.me
 	args.Term = rf.currentTerm
 	args.LastLogIndex = rf.lastLogIndex
-	args.LastLogTerm = rf.log[rf.lastLogIndex].term
+	args.LastLogTerm = rf.log[rf.lastLogIndex].Term
 
 	// vote self
 	voteGranted := 1
-	for _, peer := range rf.peers{
-		reply := RequestVoteReply{}
-		ok := peer.Call("Raft.RequestVote", &args, &reply)
-		DPrintf("call[Raft.RequestVote]: peer=%v, return %v, voted=%v", peer, ok, reply.VoteGranted)
-		if ok {
-			if reply.VoteGranted{
-				DPrintf("total voted: %d\n", voteGranted)
-				voteGranted++
+	DPrintf("Starting request vote: id=%d, from=%v\n", rf.me, rf.peers)
+	for server := range rf.peers {
+		if server != rf.me {
+			reply := RequestVoteReply{}
+			ok := rf.sendRequestVote(server, &args, &reply)
+			DPrintf("call[Raft.RequestVote]: server=%d, return %v, voted=%v", server, ok, reply.VoteGranted)
+			if ok {
+				if reply.VoteGranted {
+					voteGranted++
+					DPrintf("total voted: id=%d, votes=%d\n", rf.me, voteGranted)
+				}
+				DPrintf("votes=%d, majority=%d", voteGranted, len(rf.peers)/2)
+				if voteGranted > len(rf.peers)/2 {
+					DPrintf("--> Become Leader: id=%d\n", rf.me)
+					rf.state = Leader
+					return
+				}
+			} else {
+				DPrintf("Failed call[Raft.RequestVote]\n")
 			}
 		}
 	}
 
-	DPrintf("votes=%d, majority=%d", voteGranted, len(rf.peers)/2)
-	if voteGranted > len(rf.peers)/2{
-		DPrintf("--> Become Leader: id=%d\n", rf.me)
-		rf.state = Leader
-	}
 }
 
 func (rf *Raft) sendHeartBeat() {
@@ -418,14 +433,16 @@ func (rf *Raft) sendHeartBeat() {
 	args.Term = rf.currentTerm
 	args.LeaderID = rf.me
 	args.PrevLogIndex = rf.lastLogIndex
-	args.PrevLogTerm = rf.log[rf.lastLogIndex].term
+	args.PrevLogTerm = rf.log[rf.lastLogIndex].Term
 	args.Enties = nil
 	args.LeaderCommit = rf.commitIndex
 
-	for _, peer := range rf.peers{
-		reply := AppendEntriesReply{}
-		ok := peer.Call("Raft.AppendEntries", &args, &reply)
-		DPrintf("HearBeat received from %v result %v\n", peer, ok)
+	for server := range rf.peers {
+		if server != rf.me {
+			reply := AppendEntriesReply{}
+			ok := rf.sendAppendEntries(server, &args, &reply)
+			DPrintf("HearBeat received from %d result %v\n", server, ok)
+		}
 	}
 }
 
@@ -447,21 +464,29 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-		
+
 	// Your initialization code here (2A, 2B, 2C).
 	rf.state = Follower
 	rf.currentTerm = 0
 	rf.commitIndex = 0
 	rf.lastApplied = 0
+	rf.voteFor = -1 // -1 means null
 	rf.nextIndex = make(map[int]int)
 	rf.matchIndex = make(map[int]int)
-	
+
 	rf.lastLogIndex = 1
 	rf.log = make(map[int]LogEntry)
-		
+
 	rf.electionTimeout = generateTimeout()
-		
-	DPrintf("NEW Raft: id=%d, state=%d\n", rf.me, rf.state)
+	// switch rf.me {
+	// case 0:
+	// 	rf.electionTimeout = 300
+	// default:
+	// 	rf.electionTimeout = 3000
+	// }
+	rf.receiveHeartBeat = false
+
+	DPrintf("NEW Raft: id=%d, state=%d, peers=%v, ElectionTimeout=%d\n", rf.me, rf.state, rf.peers, rf.electionTimeout)
 	go rf.handleHeartBeat()
 
 	// initialize from state persisted before a crash
