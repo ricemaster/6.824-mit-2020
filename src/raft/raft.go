@@ -102,8 +102,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	rf.mu.Lock()
 	term = rf.currentTerm
 	isleader = (rf.state == Leader)
+	rf.mu.Unlock()
 
 	// DPrintf("GetStatus: id=%d, term=%d, isleader=%v\n", rf.me, term, isleader)
 
@@ -176,8 +178,8 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	rf.receiveHeartBeat = true
-	rf.mu.Unlock()
 	
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
@@ -289,9 +291,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.lastLogIndex)
 	}
 
+	rf.mu.Lock()
 	rf.state = Follower
 
 	rf.currentTerm = args.Term
+	rf.mu.Unlock()
+
 	reply.Success = true
 }
 
@@ -307,6 +312,12 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	if !ok {
 		DPrintf("Failed to Sent HeartBeat: from %d to %d\n", rf.me, server)
 	}
+	rf.mu.Lock()
+	if reply.Term > rf.currentTerm {
+		rf.state = Follower
+		DPrintf("Become Follower: id=%d, term=%d, server=%d, term=%d\n", rf.me, rf.currentTerm, server, reply.Term)
+	}
+	rf.mu.Unlock()
 	return ok
 }
 
@@ -374,13 +385,14 @@ func (rf *Raft) handleElectionTimeout() {
 			rf.mu.Unlock()
 
 			for i := 0; i < rf.electionTimeout; i++ {
-				// rf.mu.Lock()
 				time.Sleep(time.Millisecond)
+				rf.mu.Lock()
 				if rf.receiveHeartBeat {
 					DPrintf("Reset ElectionTimer: id=%d, state=%d\n", rf.me, rf.state)
+					rf.mu.Unlock()
 					break
 				}
-				// rf.mu.Unlock()
+				rf.mu.Unlock()
 			}
 			rf.mu.Lock()
 			if !rf.receiveHeartBeat {
@@ -399,6 +411,7 @@ func (rf *Raft) handleElectionTimeout() {
 				time.Sleep(time.Millisecond)
 				rf.mu.Lock()
 				if rf.receiveHeartBeat {
+					rf.mu.Unlock()
 					break
 				}
 				rf.mu.Unlock()
@@ -442,9 +455,13 @@ func (rf *Raft) startElection() {
 				DPrintf("Received vote response: server=%d, voted=%v", server, reply)
 				
 				if ok {
-					if rf.state == Leader{
+					rf.mu.Lock()
+					currentStat := rf.state
+					rf.mu.Unlock()
+					if currentStat == Leader{
 						return 
 					}
+
 					if reply.VoteGranted {
 						voteGranted++
 						// DPrintf("total voted: id=%d, votes=%d\n", rf.me, voteGranted)
