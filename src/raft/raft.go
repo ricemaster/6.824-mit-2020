@@ -263,14 +263,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	rf.receiveHeartBeat = true
 	rf.mu.Unlock()
+
 	// DPrintf("HearBeat received: Leader=%d, Follower=%d\n", args.LeaderID, rf.me)
 
-
+	rf.mu.Lock()
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
+		rf.mu.Unlock()
 		return
 	}
+	rf.mu.Unlock()
 
 	log := rf.log[args.PrevLogIndex]
 	if log.Term != args.PrevLogTerm {
