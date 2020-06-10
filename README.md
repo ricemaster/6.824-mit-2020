@@ -10,13 +10,15 @@
 
 ## Lab2 Raft
 
+>Each "Passed" line contains five numbers
+
+| Test        | Total Time | Raft Peers | RPC messages | RPCs sent | Committed Logs |
+| ----------- | ---------- | ---------- | ------------ | --------- | -------------- |
+| Election    | 4.1 s      | 3          | 18 bytes     | 4624      | 0              |
+| RE-Election | 5.0 s      | 3          | 54 bytes     | 9628      | 0              |
+
+
+
 ### 2A-Leader Election Finish@06/10/2020
-
->
-> Each "Passed" line contains five numbers
-
-| Total Time (s) | Raft Peers (usually 3 or 5) | Total  RPC messages (bytes) | Total RPCs sent | Committed Logs |
-| -------------- | --------------------------- | --------------------------- | --------------- | -------------- |
-|                |                             |                             |                 |                |
 
 ![Passed Lab 2A](https://github.com/ricemaster/6.824-mit-2020/blob/master/src/raft/img/raft_2A.png)
