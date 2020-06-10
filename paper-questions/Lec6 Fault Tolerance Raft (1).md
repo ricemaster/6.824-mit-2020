@@ -1,6 +1,6 @@
 # LEC 6: Fault Tolerance: Raft (1)
 
-# Read
+# Paper
 
 [In Search of an Understandable Consensus Algorithm (Extended Version)](https://pdos.csail.mit.edu/6.824/papers/raft-extended.pdf)
 
