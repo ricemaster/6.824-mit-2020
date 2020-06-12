@@ -180,25 +180,33 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.receiveHeartBeat = true
-	
+
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
-		DPrintf("Rejected Vote Request: Candidate(id=%d, term=%d), This(id=%d, term=%d)\n", args.CandidateID, args.Term, rf.me, rf.currentTerm)
+		DPrintf("Rejected Vote Request: Stale Term - Candidate(id=%d, term=%d), This(id=%d, term=%d)\n", args.CandidateID, args.Term, rf.me, rf.currentTerm)
 		return
 	}
 
-	if _,exist :=rf.currentVote[rf.currentTerm]; !exist{
+	if _, exist := rf.currentVote[args.Term]; !exist {
+		delete(rf.currentVote, rf.currentTerm)
 		rf.voteFor = args.CandidateID
+	} else {
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		DPrintf("Rejected Vote Request: Have Voted in current term - Candidate(id=%d, term=%d), This(id=%d, term=%d, currentVote=%v)\n", args.CandidateID, args.Term, rf.me, rf.currentTerm, rf.currentVote)
+		return
+
 	}
 
 	if (rf.voteFor == args.CandidateID) &&
 		rf.log[args.LastLogIndex].Term == args.LastLogTerm {
-			rf.voteFor = args.CandidateID
-			rf.currentTerm = args.Term
-			reply.Term = rf.currentTerm
-			reply.VoteGranted = true
-			// DPrintf("Agreed Vote Request: Candidate(id=%d, term=%d), This(id=%d, term=%d)\n", args.CandidateID, args.Term, rf.me, rf.currentTerm)
+		// rf.voteFor = args.CandidateID
+		rf.currentTerm = args.Term
+		rf.currentVote[rf.currentTerm] = rf.voteFor
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = true
+		// DPrintf("Agreed Vote Request: Candidate(id=%d, term=%d), This(id=%d, term=%d)\n", args.CandidateID, args.Term, rf.me, rf.currentTerm)
 		return
 	}
 	DPrintf("Failed to vote: Candidate(id=%d, term=%d), This(id=%d, term=%d)\n", args.CandidateID, args.Term, rf.me, rf.currentTerm)
@@ -424,7 +432,7 @@ func (rf *Raft) handleElectionTimeout() {
 			rf.sendHeartBeat()
 			time.Sleep(time.Millisecond * time.Duration(rf.electionTimeout))
 		default:
-			DPrintf("Invalid State: id=%d, state=%d\n",rf.me, currentState)
+			DPrintf("Invalid State: id=%d, state=%d\n", rf.me, currentState)
 		}
 	}
 
@@ -433,7 +441,7 @@ func (rf *Raft) handleElectionTimeout() {
 func (rf *Raft) startElection() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	
+
 	rf.currentTerm++
 
 	rf.voteFor = rf.me
@@ -456,13 +464,13 @@ func (rf *Raft) startElection() {
 				ok := rf.sendRequestVote(server, &args, &reply)
 
 				DPrintf("Received vote response: server=%d, voted=%v", server, reply)
-				
+
 				if ok {
 					rf.mu.Lock()
 					currentStat := rf.state
 					rf.mu.Unlock()
-					if currentStat == Leader{
-						return 
+					if currentStat == Leader {
+						return
 					}
 
 					if reply.VoteGranted {
@@ -503,7 +511,7 @@ func (rf *Raft) sendHeartBeat() {
 	for server := range rf.peers {
 		if server != rf.me {
 			reply := AppendEntriesReply{}
-			DPrintf("Send HeartBeat: from %d to %d\n",rf.me, server)
+			DPrintf("Send HeartBeat: from %d to %d\n", rf.me, server)
 			go rf.sendAppendEntries(server, &args, &reply)
 		}
 	}
